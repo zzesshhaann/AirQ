@@ -1,11 +1,12 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import L from 'leaflet';
 import { GoogleGenAI } from "@google/genai";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 // --- Expanded Mock Data with Worldwide Cities ---
-const mockAqiData = [
+const initialAqiData = [
     // Pakistan
     { city: "Karachi", lat: 24.8607, lon: 67.0011, aqi: 185 },
     { city: "Lahore", lat: 31.5820, lon: 74.3294, aqi: 250 },
@@ -44,7 +45,7 @@ const HISTORICAL_DATA_KEY = 'historicalAqiData';
 // --- Generate and Retrieve Historical Data ---
 const generateHistoricalData = (baseAqi) => {
     const data = [];
-    for (let i = 30; i >= 0; i--) {
+    for (let i = 90; i >= 0; i--) { // Generate 90 days of data
         const date = new Date();
         date.setDate(date.getDate() - i);
         const aqi = baseAqi + Math.floor(Math.random() * 41) - 20; // Fluctuation of +/- 20
@@ -56,7 +57,7 @@ const generateHistoricalData = (baseAqi) => {
 const initializeHistoricalData = () => {
     if (!localStorage.getItem(HISTORICAL_DATA_KEY)) {
         const allHistoricalData = {};
-        mockAqiData.forEach(city => {
+        initialAqiData.forEach(city => {
             allHistoricalData[city.city] = generateHistoricalData(city.aqi);
         });
         localStorage.setItem(HISTORICAL_DATA_KEY, JSON.stringify(allHistoricalData));
@@ -69,8 +70,8 @@ const getHistoricalDataForCity = (cityName) => {
 };
 
 // --- Mock Geocoding Service ---
-const geocodeCity = (cityName) => {
-    const cityData = mockAqiData.find(
+const geocodeCity = (cityName, data) => {
+    const cityData = data.find(
         city => city.city.toLowerCase() === cityName.toLowerCase().trim()
     );
     return cityData ? { lat: cityData.lat, lon: cityData.lon } : null;
@@ -89,17 +90,20 @@ const getAqiInfo = (aqi) => {
 const App = () => {
     const mapContainer = useRef(null);
     const map = useRef(null);
+    const markersLayer = useRef(null);
+    const [aqiData, setAqiData] = useState(initialAqiData);
 
+    // Effect for initializing map and historical data
     useEffect(() => {
-        initializeHistoricalData(); // Ensure historical data is ready on load
-
+        initializeHistoricalData();
         if (map.current) return;
         
         map.current = L.map(mapContainer.current, { center: [20, 20], zoom: 2, zoomControl: false });
-
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
         }).addTo(map.current);
+
+        markersLayer.current = L.layerGroup().addTo(map.current);
 
         const animationStyleSheet = document.createElement('style');
         document.head.appendChild(animationStyleSheet);
@@ -112,7 +116,18 @@ const App = () => {
         });
         animationStyleSheet.innerHTML = animationStyles;
 
-        mockAqiData.forEach(data => {
+        return () => {
+            if (map.current) { map.current.remove(); map.current = null; }
+            if (animationStyleSheet) { document.head.removeChild(animationStyleSheet); }
+        };
+    }, []);
+
+    // Effect for updating markers when AQI data changes
+    useEffect(() => {
+        if (!markersLayer.current) return;
+        markersLayer.current.clearLayers();
+
+        aqiData.forEach(data => {
             const aqiInfo = getAqiInfo(data.aqi);
             const animationName = `pulse-${aqiInfo.classification.replace(/\s+/g, '-').toLowerCase()}`;
             const iconHtml = `<div style="background-color: ${aqiInfo.color}; width: 18px; height: 18px; border-radius: 50%; border: 2px solid ${aqiInfo.darkColor}; animation: ${animationName} 2s infinite;"></div>`;
@@ -122,14 +137,22 @@ const App = () => {
             const popupRoot = createRoot(popupNode);
             popupRoot.render(<PopupContent data={data} aqiInfo={aqiInfo} />);
             
-            L.marker([data.lat, data.lon], { icon: customIcon }).addTo(map.current).bindPopup(popupNode);
+            L.marker([data.lat, data.lon], { icon: customIcon }).addTo(markersLayer.current).bindPopup(popupNode);
         });
-        
-        return () => {
-            if (map.current) { map.current.remove(); }
-            map.current = null;
-            if (animationStyleSheet) { document.head.removeChild(animationStyleSheet); }
-        };
+    }, [aqiData]);
+
+    // Effect for simulating real-time data updates
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setAqiData(prevData =>
+                prevData.map(city => {
+                    const change = Math.floor(Math.random() * 11) - 5; // Fluctuation of +/- 5
+                    return { ...city, aqi: Math.max(0, city.aqi + change) };
+                })
+            );
+        }, 300000); // 5 minutes
+
+        return () => clearInterval(interval);
     }, []);
 
     const handleSearch = (coords) => map.current?.flyTo([coords.lat, coords.lon], 10);
@@ -138,20 +161,20 @@ const App = () => {
 
     return (
         <>
-            <Header onSearch={handleSearch} onFocusPakistan={focusOnPakistan} onResetWorldwide={resetToWorldwide} />
+            <Header onSearch={handleSearch} onFocusPakistan={focusOnPakistan} onResetWorldwide={resetToWorldwide} aqiData={aqiData} />
             <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
             <Legend />
         </>
     );
 };
 
-const Header = ({ onSearch, onFocusPakistan, onResetWorldwide }) => {
+const Header = ({ onSearch, onFocusPakistan, onResetWorldwide, aqiData }) => {
     const [searchTerm, setSearchTerm] = useState('');
 
     const handleSubmit = (e) => {
         e.preventDefault();
         if (!searchTerm) return;
-        const coords = geocodeCity(searchTerm);
+        const coords = geocodeCity(searchTerm, aqiData);
         if (coords) { onSearch(coords); } 
         else { alert(`City "${searchTerm}" not found.`); }
         setSearchTerm('');
@@ -160,14 +183,14 @@ const Header = ({ onSearch, onFocusPakistan, onResetWorldwide }) => {
     const buttonStyle = { background: 'rgba(255, 255, 255, 0.1)', border: '1px solid var(--glass-border)', color: 'var(--text-color)', borderRadius: '8px', padding: '8px 12px', cursor: 'pointer', fontSize: '14px', fontFamily: 'inherit', transition: 'background 0.2s' };
     
     return (
-        <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', padding: '10px 20px', background: 'var(--glass-background)', backdropFilter: 'blur(10px) saturate(180%)', WebkitBackdropFilter: 'blur(10px) saturate(180%)', borderRadius: '12px', border: '1px solid var(--glass-border)', zIndex: 1000, boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)', color: 'var(--text-color)', display: 'flex', alignItems: 'center', gap: '20px' }}>
-            <span style={{ fontSize: '20px', fontWeight: '600' }}>AuraGuard</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div id="app-header" style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', padding: '10px 20px', background: 'var(--glass-background)', backdropFilter: 'blur(10px) saturate(180%)', WebkitBackdropFilter: 'blur(10px) saturate(180%)', borderRadius: '12px', border: '1px solid var(--glass-border)', zIndex: 1000, boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)', color: 'var(--text-color)', display: 'flex', alignItems: 'center', gap: '20px' }}>
+            <span style={{ fontSize: '20px', fontWeight: '600', flexShrink: 0 }}>AuraGuard</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
                 <button onClick={onFocusPakistan} style={buttonStyle} onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'} onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}>Focus Pakistan</button>
                 <button onClick={onResetWorldwide} style={buttonStyle} onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)'} onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}>Worldwide</button>
             </div>
-            <form onSubmit={handleSubmit} style={{ display: 'flex', alignItems: 'center' }}>
-                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search cities..." style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--glass-border)', color: 'var(--text-color)', padding: '5px 0', fontSize: '14px', outline: 'none', width: '180px', transition: 'border-color 0.3s' }} onFocus={(e) => e.target.style.borderBottomColor = 'rgba(255, 255, 255, 0.8)'} onBlur={(e) => e.target.style.borderBottomColor = 'var(--glass-border)'}/>
+            <form onSubmit={handleSubmit} style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search cities..." style={{ background: 'transparent', border: 'none', borderBottom: '1px solid var(--glass-border)', color: 'var(--text-color)', padding: '5px 0', fontSize: '14px', outline: 'none', width: '100%', minWidth: '150px', transition: 'border-color 0.3s' }} onFocus={(e) => e.target.style.borderBottomColor = 'rgba(255, 255, 255, 0.8)'} onBlur={(e) => e.target.style.borderBottomColor = 'var(--glass-border)'}/>
                 <button type="submit" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '5px', marginLeft: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--text-color)', opacity: 0.8}}><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 </button>
@@ -179,7 +202,7 @@ const Header = ({ onSearch, onFocusPakistan, onResetWorldwide }) => {
 const Legend = () => {
     const aqiLevels = [0, 51, 101, 151, 201, 301];
     return (
-        <div style={{ position: 'absolute', bottom: '30px', right: '20px', padding: '15px', background: 'var(--glass-background)', backdropFilter: 'blur(10px) saturate(180%)', WebkitBackdropFilter: 'blur(10px) saturate(180%)', borderRadius: '12px', border: '1px solid var(--glass-border)', zIndex: 1000, boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)' }}>
+        <div id="app-legend" style={{ position: 'absolute', bottom: '30px', right: '20px', padding: '15px', background: 'var(--glass-background)', backdropFilter: 'blur(10px) saturate(180%)', WebkitBackdropFilter: 'blur(10px) saturate(180%)', borderRadius: '12px', border: '1px solid var(--glass-border)', zIndex: 1000, boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)' }}>
             <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>AQI Legend</h4>
             {aqiLevels.map(aqi => {
                 const info = getAqiInfo(aqi);
@@ -194,20 +217,42 @@ const Legend = () => {
     );
 };
 
-const AqiChart = ({ data, color }) => (
-    <div style={{ width: '100%', height: 200, marginTop: '15px' }}>
-        <ResponsiveContainer>
-            <LineChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.2)" />
-                <XAxis dataKey="date" stroke="rgba(255, 255, 255, 0.7)" fontSize={10} tickFormatter={(tick) => new Date(tick).toLocaleDateString('en-US', {month: 'short', day: 'numeric'})} />
-                <YAxis stroke="rgba(255, 255, 255, 0.7)" fontSize={10} />
-                <Tooltip contentStyle={{ backgroundColor: 'rgba(30,30,30,0.8)', border: '1px solid var(--glass-border)' }} />
-                <Line type="monotone" dataKey="aqi" stroke={color} strokeWidth={2} dot={false} name="AQI" />
-            </LineChart>
-        </ResponsiveContainer>
-    </div>
-);
+// FIX: Explicitly type the props for CustomTooltip and make them optional.
+// Recharts injects these props at runtime, and this change satisfies TypeScript's static analysis.
+const CustomTooltip = ({ active, payload, label }: { active?: boolean, payload?: any[], label?: string | number }) => {
+    if (active && payload && payload.length) {
+        return (
+            <div style={{ background: 'rgba(30,30,30,0.9)', padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--glass-border)' }}>
+                <p style={{ margin: 0, fontSize: 12 }}>{`Date: ${label}`}</p>
+                <p style={{ margin: '2px 0 0 0', color: payload[0].stroke, fontSize: 12 }}>{`Avg. AQI: ${payload[0].value}`}</p>
+            </div>
+        );
+    }
+    return null;
+};
 
+const AqiChart = ({ data, color, view }) => {
+    const tickFormatter = (tick) => {
+        if (view === 'daily') return new Date(tick).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        if (view === 'weekly') return `W/C ${new Date(tick).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+        if (view === 'monthly') return new Date(tick).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+        return tick;
+    };
+
+    return (
+        <div style={{ width: '100%', height: 200, marginTop: '15px' }}>
+            <ResponsiveContainer>
+                <LineChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.2)" />
+                    <XAxis dataKey="date" stroke="rgba(255, 255, 255, 0.7)" fontSize={10} tickFormatter={tickFormatter} />
+                    <YAxis stroke="rgba(255, 255, 255, 0.7)" fontSize={10} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Line type="monotone" dataKey="aqi" stroke={color} strokeWidth={2} dot={false} name="AQI" />
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
+};
 
 const PopupContent = ({ data, aqiInfo }) => {
     const [advice, setAdvice] = useState('');
@@ -218,9 +263,10 @@ const PopupContent = ({ data, aqiInfo }) => {
     const [dateRange, setDateRange] = useState(() => {
         const endDate = new Date();
         const startDate = new Date();
-        startDate.setDate(endDate.getDate() - 7);
+        startDate.setDate(endDate.getDate() - 30);
         return { start: startDate.toISOString().split('T')[0], end: endDate.toISOString().split('T')[0] };
     });
+    const [view, setView] = useState('daily'); // daily, weekly, monthly
 
     const getAdvice = async () => {
         setIsLoading(true); setError(''); setAdvice('');
@@ -245,10 +291,35 @@ const PopupContent = ({ data, aqiInfo }) => {
         setShowHistory(!showHistory);
     };
 
-    const filteredData = historicalData.filter(d => d.date >= dateRange.start && d.date <= dateRange.end);
-    
+    const aggregateData = (data, viewType) => {
+        if (viewType === 'daily') return data;
+        const aggregated = {};
+        data.forEach(d => {
+            const date = new Date(d.date);
+            let key;
+            if (viewType === 'weekly') {
+                const day = date.getDay();
+                const diff = date.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+                key = new Date(date.setDate(diff)).toISOString().split('T')[0];
+            } else { // monthly
+                key = new Date(date.getFullYear(), date.getMonth(), 1).toISOString().split('T')[0];
+            }
+            if (!aggregated[key]) { aggregated[key] = { total: 0, count: 0 }; }
+            aggregated[key].total += d.aqi;
+            aggregated[key].count++;
+        });
+        return Object.keys(aggregated).map(key => ({
+            date: key,
+            aqi: Math.round(aggregated[key].total / aggregated[key].count)
+        }));
+    };
+
+    const dataInDateRange = historicalData.filter(d => d.date >= dateRange.start && d.date <= dateRange.end);
+    const chartData = aggregateData(dataInDateRange, view);
+
     const sharedButtonStyle = { width: '100%', padding: '8px', marginTop: '10px', background: 'rgba(255, 255, 255, 0.2)', border: '1px solid var(--glass-border)', borderRadius: '8px', color: 'white', cursor: 'pointer', fontSize: '14px', transition: 'background 0.2s' };
-    const dateInputStyle = { background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '4px', padding: '4px', fontFamily: 'inherit' };
+    const dateInputStyle = { background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '4px', padding: '4px', fontFamily: 'inherit', width: '100%' };
+    const viewButtonStyle = (isActive) => ({ background: isActive ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '6px', padding: '5px 8px', cursor: 'pointer', fontSize: '12px', transition: 'background 0.2s' });
 
     return (
         <div>
@@ -278,11 +349,16 @@ const PopupContent = ({ data, aqiInfo }) => {
             
             {showHistory && (
                 <div style={{ marginTop: '15px', borderTop: '1px solid var(--glass-border)', paddingTop: '10px' }}>
-                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '5px', fontSize: '12px' }}>
-                        <label>Start: <input type="date" style={dateInputStyle} value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} /></label>
-                        <label>End: <input type="date" style={dateInputStyle} value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} /></label>
+                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '12px' }}>
+                        <label style={{flex: 1}}>Start<input type="date" style={dateInputStyle} value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} /></label>
+                        <label style={{flex: 1}}>End<input type="date" style={dateInputStyle} value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} /></label>
                     </div>
-                    <AqiChart data={filteredData} color={aqiInfo.color} />
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '5px', marginTop: '10px' }}>
+                        <button onClick={() => setView('daily')} style={viewButtonStyle(view === 'daily')}>Daily</button>
+                        <button onClick={() => setView('weekly')} style={viewButtonStyle(view === 'weekly')}>Weekly</button>
+                        <button onClick={() => setView('monthly')} style={viewButtonStyle(view === 'monthly')}>Monthly</button>
+                    </div>
+                    <AqiChart data={chartData} color={aqiInfo.color} view={view} />
                 </div>
             )}
         </div>

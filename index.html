@@ -57,6 +57,37 @@
         .leaflet-container a.leaflet-popup-close-button {
             color: var(--text-color) !important;
         }
+        
+        /* Responsive Design for Mobile */
+        @media (max-width: 768px) {
+            #app-header {
+                width: 95%;
+                left: 2.5%;
+                transform: translateX(0);
+                flex-direction: column;
+                gap: 10px;
+                padding: 10px;
+            }
+            #app-header form {
+                width: 100%;
+            }
+            #app-header input[type="text"] {
+                width: 100%;
+                box-sizing: border-box; /* Ensures padding doesn't affect width */
+            }
+            #app-legend {
+                bottom: 10px;
+                right: 10px;
+                padding: 10px;
+                font-size: 12px;
+            }
+            #app-legend h4 {
+                font-size: 14px;
+            }
+            .leaflet-popup-content {
+                min-width: 200px !important;
+            }
+        }
     </style>
 <script type="importmap">
 {
